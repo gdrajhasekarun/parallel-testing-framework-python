@@ -1,6 +1,7 @@
 import itertools
 import sqlite3
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 from io import BytesIO
@@ -14,6 +15,34 @@ def read_excel_in_chunks(excel_file_content, sheet_name):
     df = pd.read_excel(excel_file_content, sheet_name=sheet_name, engine='openpyxl')
     return dd.from_pandas(df, npartitions=10)
 
+def process_sheet(sheet_name, excel_file_content, cursor, conn):
+    try:
+        dask_df = read_excel_in_chunks(excel_file_content, sheet_name)
+        df = dask_df.compute()
+        df.replace({np.nan: 'Null'}, inplace=True)
+        # Ensure DataFrame has columns
+        if df.empty or df.columns.empty:
+            print(f"Warning: Sheet '{sheet_name}' is empty. Skipping...")
+            return
+        # Create a table for the sheet (if it doesn't already exist)
+        columns = ', '.join([f'"{col}" TEXT' for col in df.columns])
+        cursor.execute(f"CREATE TABLE IF NOT EXISTS {sheet_name} ({columns})")
+
+        # Insert data from the DataFrame into the corresponding table
+        for idx, row in enumerate(df.itertuples(index=False, name=None), start=1):
+            try:
+                placeholders = ', '.join(['?' for _ in row])
+                cursor.execute(f"INSERT INTO {sheet_name} VALUES ({placeholders})", row)
+            except Exception as e:
+                print(f"Error inserting row {idx} in sheet '{sheet_name}': {e}")
+                print(f"Problematic row data: {row}")  # Print the actual row data
+
+        # Commit each insert operation
+        conn.commit()
+        print(f"Sheet {sheet_name} processed successfully")
+    except Exception as e:
+        print(f"Sheet {sheet_name} cannot be processed: {e}")
+
 # Function to convert Excel file to SQLite DB
 def excel_to_db(excel_file_content, db_file_path):
     # Open the SQLite database (or create one if it doesn't exist)
@@ -21,27 +50,13 @@ def excel_to_db(excel_file_content, db_file_path):
 
     # Read the Excel file into a pandas ExcelFile object
     excel_file = pd.ExcelFile(excel_file_content)
-
-    # Iterate over each sheet in the Excel file
-    for sheet_name in excel_file.sheet_names:
-        # Read the sheet into a DataFrame
-        # df = excel_file.parse(sheet_name)
-        dask_df = read_excel_in_chunks(excel_file_content, sheet_name)
-        df = dask_df.compute()
-        df.replace({np.nan: 'Null'}, inplace=True)
-        # Create a table for the sheet (if it doesn't already exist)
-        columns = ', '.join([f'"{col}" TEXT' for col in df.columns])
-        cursor.execute(f"CREATE TABLE IF NOT EXISTS {sheet_name} ({columns})")
-
-        # Insert data from the DataFrame into the corresponding table
-        for row in df.itertuples(index=False, name=None):
-            placeholders = ', '.join(['?' for _ in row])
-            cursor.execute(f"INSERT INTO {sheet_name} VALUES ({placeholders})", row)
-
-        # Commit each insert operation
-        conn.commit()
-
-    # Close the connection to the database
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        for sheet_name in excel_file.sheet_names:
+            futures.append(executor.submit(process_sheet, sheet_name, excel_file_content, cursor, conn))
+            # Wait for all tasks to complete
+        for future in as_completed(futures):
+            future.result()
     conn.close()
 
 def get_list_tables(db_name: str) -> List[str]:
