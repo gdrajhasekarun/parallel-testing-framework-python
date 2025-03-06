@@ -5,9 +5,14 @@ import uuid
 import pandas as pd
 from io import BytesIO
 from typing import List, Dict
+import dask.dataframe as dd
 
 from app.database import connect_to_db
+import numpy as np
 
+def read_excel_in_chunks(excel_file_content, sheet_name):
+    df = pd.read_excel(excel_file_content, sheet_name=sheet_name, engine='openpyxl')
+    return dd.from_pandas(df, npartitions=10)
 
 # Function to convert Excel file to SQLite DB
 def excel_to_db(excel_file_content, db_file_path):
@@ -20,8 +25,10 @@ def excel_to_db(excel_file_content, db_file_path):
     # Iterate over each sheet in the Excel file
     for sheet_name in excel_file.sheet_names:
         # Read the sheet into a DataFrame
-        df = excel_file.parse(sheet_name)
-
+        # df = excel_file.parse(sheet_name)
+        dask_df = read_excel_in_chunks(excel_file_content, sheet_name)
+        df = dask_df.compute()
+        df.replace({np.nan: 'Null'}, inplace=True)
         # Create a table for the sheet (if it doesn't already exist)
         columns = ', '.join([f'"{col}" TEXT' for col in df.columns])
         cursor.execute(f"CREATE TABLE IF NOT EXISTS {sheet_name} ({columns})")
