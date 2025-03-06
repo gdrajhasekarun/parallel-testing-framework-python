@@ -12,6 +12,7 @@ from app.export_excel import export_to_excel
 from app.model import BatchRequest, job_store
 import os
 import io
+import aiofiles
 
 app = FastAPI()
 
@@ -37,9 +38,11 @@ async def clear_files() :
 @app.post("/batch/update/{target}")
 async def upload_excel(target: str, file: List[UploadFile] = File(...)):
     for f in file:
-        # file_location = f"{target}_{file.filename}"
-        contents = await f.read()
-        excel_to_db(BytesIO(contents), target)
+        async with aiofiles.open(file.filename, "wb") as f:
+            while chunk := await file.read(1024 * 1024):  # Read 1 MB at a time
+                await f.write(chunk)
+        with open(file.filename, "rb") as f:
+            excel_to_db(BytesIO(f.read()), target)
     return get_list_tables(target)
     # return JSONResponse(content={"message": "Excel file uploaded and data saved"}, status_code=200)
 
