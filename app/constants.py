@@ -1,0 +1,3 @@
+
+class Constants:
+    FILE_STORE_TABLE = "FILE_UPLOAD_STATUS"

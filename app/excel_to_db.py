@@ -13,7 +13,7 @@ import numpy as np
 
 def read_excel_in_chunks(excel_file_content, sheet_name):
     df = pd.read_excel(excel_file_content, sheet_name=sheet_name, engine='openpyxl')
-    return dd.from_pandas(df, npartitions=10)
+    return dd.from_pandas(df, npartitions=5)
 
 def process_sheet(sheet_name, excel_file_content, cursor, conn):
     try:
@@ -45,19 +45,36 @@ def process_sheet(sheet_name, excel_file_content, cursor, conn):
 
 # Function to convert Excel file to SQLite DB
 def excel_to_db(excel_file_content, db_file_path):
-    # Open the SQLite database (or create one if it doesn't exist)
-    conn, cursor = connect_to_db(db_file_path)
+    try:
 
-    # Read the Excel file into a pandas ExcelFile object
-    excel_file = pd.ExcelFile(excel_file_content)
-    with ThreadPoolExecutor() as executor:
-        futures = []
+        # Open the SQLite database (or create one if it doesn't exist)
+        conn, cursor = connect_to_db(db_file_path)
+
+        # Read the Excel file into a pandas ExcelFile object
+        excel_file = pd.ExcelFile(excel_file_content)
+
+        # Iterate over each sheet in the Excel file
         for sheet_name in excel_file.sheet_names:
-            futures.append(executor.submit(process_sheet, sheet_name, excel_file_content, cursor, conn))
-            # Wait for all tasks to complete
-        for future in as_completed(futures):
-            future.result()
-    conn.close()
+            # Read the sheet into a DataFrame
+            # df = excel_file.parse(sheet_name)
+            df = read_excel_in_chunks(excel_file_content, sheet_name)
+
+            # Create a table for the sheet (if it doesn't already exist)
+            columns = ', '.join([f'"{col}" TEXT' for col in df.columns])
+            cursor.execute(f"CREATE TABLE IF NOT EXISTS {sheet_name} ({columns})")
+
+            # Insert data from the DataFrame into the corresponding table
+            for row in df.itertuples(index=False, name=None):
+                placeholders = ', '.join(['?' for _ in row])
+                cursor.execute(f"INSERT INTO {sheet_name} VALUES ({placeholders})", row)
+
+            # Commit each insert operation
+            conn.commit()
+
+        # Close the connection to the database
+        conn.close()
+    except Exception as e:
+        raise Exception("Failed to Process the File")
 
 def get_list_tables(db_name: str) -> List[str]:
     conn, cursor = connect_to_db(db_name)
