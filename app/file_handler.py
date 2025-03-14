@@ -23,9 +23,11 @@ class FileHandler:
 
     def save_files_names_to_database(self, files: List[str], db_source: str):
         # conn, cursor = connect_to_db('files_status')
+        inserted_ids = []
         for file in files:
-            self.__insert_files_to_database(file, db_source)
+            inserted_ids.append(self.__insert_files_to_database(file, db_source))
         self.conn.commit()
+        return inserted_ids
 
     def get_file_status(self):
         sql=f"""SELECT * FROM {Constants.FILE_STORE_TABLE}"""
@@ -60,16 +62,19 @@ class FileHandler:
         pass_count, fail_count, blank_count = self.cursor.fetchone()
         return {"pass": pass_count, "fail": fail_count, "yet": blank_count}
 
-    def update_file_upload_status(self, status, file_name):
-        sql = f"""UPDATE {Constants.FILE_STORE_TABLE} SET UPLOAD_STATUS=? WHERE FileName=?"""
-        self.cursor.execute(sql, (status, file_name))
+    def update_file_upload_status(self, status, file_name, inserted_ids):
+        id_placeholder = ", ".join('?' for _ in inserted_ids)
+        sql = f"""UPDATE {Constants.FILE_STORE_TABLE} SET UPLOAD_STATUS=? WHERE FileName=? AND id in ({id_placeholder})"""
+        self.cursor.execute(sql, [status] + [file_name] + inserted_ids)
         self.conn.commit()
 
 
     def __insert_files_to_database(self, file: str, source: str):
         sql = f"""INSERT INTO {Constants.FILE_STORE_TABLE} (FileName, SOURCE) VALUES (?, ?)"""
         self.cursor.execute(sql, (file, source))
+        inserted_id = self.cursor.lastrowid
         self.conn.commit()
+        return inserted_id
 
     def __del__(self):
         self.conn.commit()
