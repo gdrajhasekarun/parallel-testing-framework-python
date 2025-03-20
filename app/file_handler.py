@@ -21,6 +21,12 @@ class FileHandler:
                         """)
         self.conn.commit()
 
+    def drop_status_table(self,):
+        sql = f"DROP TABLE IF EXISTS {Constants.FILE_STORE_TABLE}"
+        self.cursor.execute(sql)
+        self.conn.commit()
+        self.__create_table()
+
     def save_files_names_to_database(self, files: List[str], db_source: str):
         # conn, cursor = connect_to_db('files_status')
         inserted_ids = []

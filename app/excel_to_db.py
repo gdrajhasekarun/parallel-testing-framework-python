@@ -54,7 +54,7 @@ class ExcelHandler:
             # Iterate over each sheet in the Excel file
             for sheet_name in excel_file.sheet_names:
                 # Read the sheet into a DataFrame
-                self.process_sheet(sheet_name,excel_file_content, cursor, conn)
+                self.__process_sheet(sheet_name, excel_file_content, cursor, conn)
             conn.close()
         except Exception as e:
             raise Exception("Failed to Process the File")

@@ -7,6 +7,7 @@ from starlette.background import BackgroundTasks
 
 from app.batch_processing import process_items
 from app.cache import put_value_to_cache
+from app.download_files import DownloadFiles
 from app.excel_to_db import ExcelHandler
 from app.export_excel import export_to_excel
 from app.file_handler import FileHandler
@@ -19,23 +20,26 @@ import aiofiles
 app = FastAPI()
 file_handler = FileHandler()
 
-# @app.get("/batch/clearData")
-# async def clear_files() :
-#     # Get the current working directory
-#     working_dir = os.getcwd()
-#
-#     # List all files in the directory
-#     files = os.listdir(working_dir)
-#
-#     # Loop through the files and delete those with a .db extension
-#     for file in files:
-#         if file.endswith('.db'):
-#             file_path = os.path.join(working_dir, file)
-#             try:
-#                 os.remove(file_path)
-#                 print(f"Deleted: {file_path}")
-#             except Exception as e:
-#                 print(f"Error deleting {file_path}: {e}")
+@app.get("/batch/clearData")
+async def clear_files() :
+    # Get the current working directory
+    working_dir = os.getcwd()
+
+    # List all files in the directory
+    files = os.listdir(working_dir)
+
+    # Loop through the files and delete those with a .db extension
+    for file in files:
+        if file.endswith('.db') or file.endswith(".xlsx"):
+            if file.startswith("files_status"):
+                FileHandler().drop_status_table()
+                continue
+            file_path = os.path.join(working_dir, file)
+            try:
+                os.remove(file_path)
+                print(f"Deleted: {file_path}")
+            except Exception as e:
+                print(f"Error deleting {file_path}: {e}")
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -58,7 +62,7 @@ def handle_files(files: List[UploadFile], db_source: str, inserted_ids):
         with open(file_path, 'rb') as f:
             status = "fail"
             try:
-                excel_to_db(BytesIO(f.read()), db_source)
+                ExcelHandler().excel_to_db(BytesIO(f.read()), db_source)
                 status = "pass"
             except Exception as e:
                 status = "fail"
@@ -132,3 +136,17 @@ async def get_status(request: Request):
 async def download_excel(request: Request):
     session_id = request.query_params.get("sessionName")
     return export_to_excel(session_id.replace(" ", "_"))
+
+@app.get("/batch/fee-schedule")
+async def download_fee_schedule(request: Request):
+    return DownloadFiles().upload_files_content(request.query_params.get("theme"), request.query_params.get("archive"))
+
+@app.get("/batch/get-matching-fee-schedule")
+async def get_data_from_fee_schedule(request: Request):
+    query_params = request.query_params
+    return {"service_dates": DownloadFiles().get_value_from_database(
+                                            query_params.get("theme"),
+                                            query_params.get("column_name"),
+                                            query_params.get("column_value"),
+                                            query_params.get("date_column"),
+                                            query_params.get("service_date"))}
