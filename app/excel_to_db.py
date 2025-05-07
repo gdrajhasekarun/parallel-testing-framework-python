@@ -3,61 +3,112 @@ import uuid
 import pandas as pd
 from typing import List, Dict
 import dask.dataframe as dd
+from openpyxl import load_workbook
 
 from app.database import connect_to_db, update_tables
 import numpy as np
 
 class ExcelHandler:
-
-    def __read_excel_in_chunks(self, excel_file_content, sheet_name):
-        df = pd.read_excel(excel_file_content, sheet_name=sheet_name, engine='openpyxl')
-        return dd.from_pandas(df, npartitions=5)
-
-    def __process_sheet(self, sheet_name, excel_file_content, cursor, conn):
+    BATCH_SIZE = 10000
+    def __process_sheet(self, work_sheet, sheet_name, cursor, conn):
         try:
-            dask_df = self.__read_excel_in_chunks(excel_file_content, sheet_name)
-            df = dask_df.compute()
-            df.replace({np.nan: 'Null'}, inplace=True)
-            # Ensure DataFrame has columns
-            if df.empty or df.columns.empty:
-                print(f"Warning: Sheet '{sheet_name}' is empty. Skipping...")
-                return
-            # Create a table for the sheet (if it doesn't already exist)
-            columns = ', '.join([f'"{col}" TEXT' for col in df.columns])
-            cursor.execute(f"CREATE TABLE IF NOT EXISTS {update_tables(sheet_name)} ({columns})")
+            header = None
+            batch = []
 
-            # Insert data from the DataFrame into the corresponding table
-            for idx, row in enumerate(df.itertuples(index=False, name=None), start=1):
-                try:
-                    placeholders = ', '.join(['?' for _ in row])
-                    cursor.execute(f"INSERT INTO {update_tables(sheet_name)} VALUES ({placeholders})", row)
-                except Exception as e:
-                    print(f"Error inserting row {idx} in sheet '{sheet_name}': {e}")
-                    print(f"Problematic row data: {row}")  # Print the actual row data
+            for i, row in enumerate(work_sheet.iter_rows(values_only=True), start=1):
+                row = ['Null' if cell is None else str(cell) for cell in row]
 
-            # Commit each insert operation
-            conn.commit()
-            print(f"Sheet {sheet_name} processed successfully")
+                if i == 1:
+                    header = row
+                    if not header or all(col == 'Null' for col in header):
+                        print(f"Warning: Sheet '{sheet_name}' is empty. Skipping...")
+                        return
+                    columns = ', '.join([f'"{col}" TEXT' for col in header])
+                    cursor.execute(f"CREATE TABLE IF NOT EXISTS {update_tables(sheet_name)} ({columns})")
+                    placeholders = ', '.join(['?' for _ in header])
+                    continue
+
+                # Ensure row has correct number of columns
+                row += ['Null'] * (len(header) - len(row))
+                row = row[:len(header)]
+                batch.append(tuple(row))
+
+                if len(batch) >= self.BATCH_SIZE:
+                    cursor.executemany(f"INSERT INTO {update_tables(sheet_name)} VALUES ({placeholders})", batch)
+                    conn.commit()
+                    batch = []
+
+            if batch:
+                cursor.executemany(f"INSERT INTO {update_tables(sheet_name)} VALUES ({placeholders})", batch)
+                conn.commit()
+
+            print(f"Sheet '{sheet_name}' processed successfully.")
+
         except Exception as e:
-            print(f"Sheet {sheet_name} cannot be processed: {e}")
+            print(f"Error processing sheet '{sheet_name}': {e}")
 
-    # Function to convert Excel file to SQLite DB
     def excel_to_db(self, excel_file_content, db_file_path):
         try:
-
-            # Open the SQLite database (or create one if it doesn't exist)
             conn, cursor = connect_to_db(db_file_path)
+            wb = load_workbook(excel_file_content, read_only=True, data_only=True)
+            sheet_names = wb.sheetnames
 
-            # Read the Excel file into a pandas ExcelFile object
-            excel_file = pd.ExcelFile(excel_file_content)
-
-            # Iterate over each sheet in the Excel file
-            for sheet_name in excel_file.sheet_names:
-                # Read the sheet into a DataFrame
-                self.__process_sheet(sheet_name, excel_file_content, cursor, conn)
+            for sheet_name in sheet_names:
+                self.__process_sheet(wb[sheet_name], sheet_name, cursor, conn)
+            wb.close()
             conn.close()
         except Exception as e:
-            raise Exception("Failed to Process the File")
+            raise Exception(f"Failed to process the file: {e}")
+
+    # def __read_excel_in_chunks(self, excel_file_content, sheet_name):
+    #     df = pd.read_excel(excel_file_content, sheet_name=sheet_name, engine='openpyxl')
+    #     return dd.from_pandas(df, npartitions=5)
+    #
+    # def __process_sheet(self, sheet_name, excel_file_content, cursor, conn):
+    #     try:
+    #         dask_df = self.__read_excel_in_chunks(excel_file_content, sheet_name)
+    #         df = dask_df.compute()
+    #         df.replace({np.nan: 'Null'}, inplace=True)
+    #         # Ensure DataFrame has columns
+    #         if df.empty or df.columns.empty:
+    #             print(f"Warning: Sheet '{sheet_name}' is empty. Skipping...")
+    #             return
+    #         # Create a table for the sheet (if it doesn't already exist)
+    #         columns = ', '.join([f'"{col}" TEXT' for col in df.columns])
+    #         cursor.execute(f"CREATE TABLE IF NOT EXISTS {update_tables(sheet_name)} ({columns})")
+    #
+    #         # Insert data from the DataFrame into the corresponding table
+    #         for idx, row in enumerate(df.itertuples(index=False, name=None), start=1):
+    #             try:
+    #                 placeholders = ', '.join(['?' for _ in row])
+    #                 cursor.execute(f"INSERT INTO {update_tables(sheet_name)} VALUES ({placeholders})", row)
+    #             except Exception as e:
+    #                 print(f"Error inserting row {idx} in sheet '{sheet_name}': {e}")
+    #                 print(f"Problematic row data: {row}")  # Print the actual row data
+    #
+    #         # Commit each insert operation
+    #         conn.commit()
+    #         print(f"Sheet {sheet_name} processed successfully")
+    #     except Exception as e:
+    #         print(f"Sheet {sheet_name} cannot be processed: {e}")
+    #
+    # # Function to convert Excel file to SQLite DB
+    # def excel_to_db(self, excel_file_content, db_file_path):
+    #     try:
+    #
+    #         # Open the SQLite database (or create one if it doesn't exist)
+    #         conn, cursor = connect_to_db(db_file_path)
+    #
+    #         # Read the Excel file into a pandas ExcelFile object
+    #         excel_file = pd.ExcelFile(excel_file_content)
+    #
+    #         # Iterate over each sheet in the Excel file
+    #         for sheet_name in excel_file.sheet_names:
+    #             # Read the sheet into a DataFrame
+    #             self.__process_sheet(sheet_name, excel_file_content, cursor, conn)
+    #         conn.close()
+    #     except Exception as e:
+    #         raise Exception("Failed to Process the File")
 
     def get_list_tables(self, db_name: str) -> List[str]:
         conn, cursor = connect_to_db(db_name)
